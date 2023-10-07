@@ -1,0 +1,856 @@
+---
+title: "Predictive Analysis Competition Exploration"
+author: "Zhenyu Wang"
+output: html_document
+---
+
+#### This R file mainly contian my some exlporation of songs dataset, and some failure attempts of data tidy and model selection.
+
+```{r}
+#Setting up my working dictionary
+setwd('/Users/jimac/Desktop/Columbia/5200 Frameworok and methods I/PAC')
+#Reading analysis CSV file as songs
+songs = read.csv('analysisData.csv')
+#Reading scoring CSV file as ScoringData
+scoringData = read.csv('scoringData.csv')
+```
+
+```{r}
+#Loading necessary packages
+library(mice)
+library(Metrics)
+library(randomForest)
+library(caret)
+library(ggcorrplot)
+library(car)
+library(leaps)
+library(glmnet)
+library(dplyr);library(stringr);library(readr);library(tidyr)
+library(mgcv)
+library(broom)
+library(forcats)
+library(e1071)
+library(ISLR2)
+library(rpart)
+library(rpart.plot)
+library(Boruta)
+library(Rborist)
+library(ranger)
+library(gbm)
+```
+
+### #At first, I haven't extract information from genre.
+
+```{r}
+#Split data into train and test
+set.seed(1031)
+split = createDataPartition(y = songs$rating, list = F,p = 0.7, groups = 300)
+train = songs[split,]
+test = songs[-split,]
+```
+
+```{r}
+#subset method
+str(train)
+subsets = regsubsets(rating~track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature,data = train, nvmax = 14)
+summary(subsets)
+summary(subsets)$adjr2
+```
+
+```{r}
+#Hybrid Stepwise method
+start_model = lm(rating~1,train)
+empty_model = lm(rating~1,train)
+full_model = lm(rating~track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature,train)
+hybrid = step(start_model, scope = list(upper = full_model, lower = empty_model),direction = 'both')
+summary(hybrid)
+```
+
+```{r}
+#Lasso and ridge regression
+x = model.matrix(rating~track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature,train)
+y = songs$instrumentalness
+lasso = cv.glmnet(x = x, y = y, alpha = 1)
+coef(lasso)
+model1 = lm(rating~track_duration+track_explicit+danceability+energy+loudness+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature,train)
+summary(model1)
+```
+
+```{r}
+#gam by adding smoothing term method
+str(songs)
+
+model2 = gam(rating~s(track_duration)+track_explicit+s(danceability)+s(energy)+s(loudness)+s(speechiness)
+                     +s(acousticness)+s(instrumentalness)+s(liveness)+s(valence)+s(tempo)+time_signature,data = train, method = "REML")
+summary(model2)
+pred_model2 = predict(model2, newdata = test)
+rmse_model2 = sqrt(mean((pred_model2 - test$rating)^2))
+rmse_model2
+```
+
+```{r}
+#by looking at correlation graph for songs numeric features
+str(songs)
+songs %>%
+  select(track_duration,danceability,energy,key,loudness,mode,speechiness,acousticness,instrumentalness,liveness,valence,tempo,time_signature,rating) %>%
+  cor() %>%
+    round(2) %>%
+ggcorrplot( type = 'lower', show.diag = F, colors = c('red','white','green'))
+```
+
+```{r}
+#after look at the cor graph and try to use gam mdoel by adding interactive term
+model3 = gam(rating~s(track_duration)+track_explicit+s(danceability)+s(energy)+s(loudness)+s(speechiness)
+                     +s(acousticness)+s(instrumentalness)+s(liveness)+s(valence)+s(tempo)+time_signature
+                    +acousticness*loudness+valence*energy+acousticness*energy+acousticness*track_duration+energy*loudness+valence*danceability+time_signature*acousticness,data = train, method = "REML")
+summary(model3)
+pred_model3 = predict(model3, newdata = test)
+rmse_model3 = sqrt(mean((pred_model3 - test$rating)^2))
+rmse_model3
+```
+
+```{r}
+#try to normalize some numeric features of songs
+str(songs)
+songs_1 <- songs %>%
+  select(-performer,-song,-genre) %>%
+  arrange(id) %>%
+  mutate(acousticness = (songs$acousticness - min(songs$acousticness))/(max(songs$acousticness) - min(songs$acousticness)),
+         speechiness = (songs$speechiness - min(songs$speechiness))/(max(songs$speechiness) - min(songs$speechiness)),
+         instrumentalness = (songs$instrumentalness - min(songs$instrumentalness))/(max(songs$instrumentalness) - min(songs$instrumentalness)),
+         liveness = (songs$liveness - min(songs$liveness))/(max(songs$liveness) - min(songs$liveness)),
+         track_duration = (songs$track_duration - min(songs$track_duration))/(max(songs$track_duration) - min(songs$track_duration)),
+         valence = scale(songs$valence, center = T, scale = F))
+
+#look at the cor graph for song_1
+songs_1 %>%
+  select(track_duration,danceability,energy,key,loudness,mode,speechiness,acousticness,instrumentalness,liveness,valence,tempo,time_signature,rating) %>%
+  cor() %>%
+    round(2) %>%
+ggcorrplot( type = 'lower', show.diag = F, colors = c('red','white','green'))
+
+#split data
+set.seed(1031)
+split = createDataPartition(y = songs_1, list = F,p = 0.7, groups = 300)
+train = songs_1[split,]
+test = songs_1[-split,]
+
+#After that try on gam model
+model4 = gam(rating~s(track_duration)+track_explicit+s(danceability)+s(energy)+s(loudness)+speechiness
+                     +s(acousticness)+s(instrumentalness)+s(tempo)+time_signature
+                    +acousticness*loudness+acousticness*energy+energy*loudness,data = train, method = "REML")
+summary(model4)
+pred_model4 = predict(model4, newdata = test)
+rmse_model4 = sqrt(mean((pred_model4 - test$rating)^2))
+rmse_model4
+```
+
+```{r}
+#Another method to deal with normalization
+songs_2 <- songs %>%
+  select(-performer,-song,-genre) %>%
+  arrange(id) %>%
+  mutate(acousticness = scale(songs$acousticness, center = T, scale = T),
+         speechiness = scale(songs$speechiness, center = T, scale = T),
+         instrumentalness = scale(songs$instrumentalness, center = T, scale = T),
+         liveness = scale(songs$liveness, center = T, scale = T),
+         valence = scale(songs$valence, center = T, scale = T),
+         tempo = scale(songs$tempo, center = T, scale = T))
+
+#split data
+set.seed(1031)
+split = createDataPartition(y = songs_2, list = F,p = 0.7, groups = 300)
+train = songs_2[split,]
+test = songs_2[-split,]
+
+model5 = gam(rating~s(track_duration)+track_explicit+s(danceability)+s(energy)+s(loudness)+s(speechiness)
+                     +s(acousticness)+s(instrumentalness)+s(liveness)+s(valence)+s(tempo)+time_signature
+                    +acousticness*loudness+valence*energy+acousticness*energy+acousticness*track_duration+energy*loudness+valence*danceability+time_signature*acousticness,data = songs_2,method = "REML")
+summary(model5)
+```
+
+```{r}
+#decision tree method
+#spit data
+set.seed(1031)
+split = createDataPartition(y = songs$rating, list = F,p = 0.7, groups = 300)
+train = songs[split,]
+test = songs[-split,]
+
+#creat 3 trees with different cp value
+tree1 = rpart(rating ~ track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature, train, control = rpart.control(cp = 0.001))
+pred1 = predict(tree1, type = 'vector')
+rmse1 = sqrt(mean((pred1 - train$rating)^2));rmse1
+
+tree2 = rpart(rating ~ track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature, train, control = rpart.control(cp = 0.0009))
+pred2 = predict(tree2, type = 'vector')
+rmse2 = sqrt(mean((pred2 - train$rating)^2));rmse2
+
+tree3 = rpart(rating ~ track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature, train, control = rpart.control(cp = 0.0008))
+pred3 = predict(tree3, type = 'vector')
+rmse3 = sqrt(mean((pred3 - train$rating)^2));rmse3
+
+#graphing tree
+rpart.plot(tree2,type = 4)
+```
+
+```{r}
+#decision tree with data tidy
+set.seed(1031)
+split = createDataPartition(y = newsongs$rating, list = F,p = 0.7, groups = 200)
+train = songs[split,]
+test = songs[-split,]
+
+tree1 = rpart(rating ~ track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature, train, control = rpart.control(cp = 0.001))
+pred1 = predict(tree1, type = 'vector')
+rmse1 = sqrt(mean((pred1 - train$rating)^2))
+
+tree2 = rpart(rating ~ genre+track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature+pop_dummy +rock_dummy +country_dummy +rb_dummy +disco_dummy +blues_dummy +hiphop_dummy +jazz_dummy +classic_dummy + na_dummy+folk_dummy+rap_dummy+dance_dummy+funk_dummy+modern_dummy+soul_dummy, train, control = rpart.control(cp = 0.0009))
+pred2 = predict(tree2, type = 'vector')
+rmse2 = sqrt(mean((pred2 - train$rating)^2));rmse2
+
+tree3 = rpart(rating ~ track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature, train, control = rpart.control(cp = 0.0008))
+pred3 = predict(tree3, type = 'vector')
+rmse3 = sqrt(mean((pred3 - train$rating)^2))
+
+rmse1
+rmse2
+rmse3
+```
+
+### Polting point to look at each variable vs. rating
+
+```{r}
+ggplot(data = newsongs, aes(x=track_duration , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=track_explicit , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=danceability , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=energy , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=key , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=loudness , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=mode , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=speechiness , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=acousticness , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=instrumentalness , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=liveness , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=valence , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=tempo , y=rating)) +
+  geom_point()
+
+ggplot(data = newsongs, aes(x=time_signature , y=rating)) +
+  geom_point()
+```
+
+```{r}
+songs
+songs_1 <- songs %>%
+  select(-performer,-song,-genre) %>%
+  arrange(id) %>%
+  mutate(track_duration = (songs$track_duration - min(songs$track_duration))/(max(songs$track_duration) - min(songs$track_duration)),
+         acousticness = (songs$acousticness - min(songs$acousticness))/(max(songs$acousticness) - min(songs$acousticness)),
+         speechiness = (songs$speechiness - min(songs$speechiness))/(max(songs$speechiness) - min(songs$speechiness)),
+         instrumentalness = (songs$instrumentalness - min(songs$instrumentalness))/(max(songs$instrumentalness) - min(songs$instrumentalness)),
+         danceability = (songs$danceability - min(songs$danceability))/(max(songs$danceability) - min(songs$danceability)),
+         liveness = (songs$liveness - min(songs$liveness))/(max(songs$liveness) - min(songs$liveness)),
+         track_duration = (songs$track_duration - min(songs$track_duration))/(max(songs$track_duration) - min(songs$track_duration)))
+
+set.seed(1031)
+split = createDataPartition(y = newsongs$rating, list = F,p = 0.7, groups = 200)
+train = newsongs[split,]
+test = newsongs[-split,]
+train
+###
+model1 = gam(rating~  s(track_duration)+track_explicit+s(danceability)+s(energy)+s(loudness)+s(speechiness)
+                     +s(acousticness)+s(instrumentalness)+s(liveness)+s(valence)+s(tempo)+time_signature+pop_dummy +rock_dummy +country_dummy +rb_dummy +disco_dummy +blues_dummy +hiphop_dummy +jazz_dummy +classic_dummy,data = train, method = "REML")
+summary(model1)
+
+pred_model1 = predict(model1, newdata = test)
+rmse_model1 = sqrt(mean((pred_model1 - test$rating)^2))
+rmse_model1
+test
+#tidy category
+#track_explicit+time_signature+key+mode
+songs %>%
+  group_by(time_signature)%>%
+  summarize(n = n())%>%
+  ungroup()%>%
+  mutate(percent = 100*n/sum(n))
+
+songs$time_signature = as.factor(songs$time_signature)
+table(songs$time_signature)
+
+songs$time_signature = fct_collapse(songs$time_signature, 'other' = c('0', '1','2','3','5'))
+fct_count(songs$time_signature)
+
+songs$track_explicit = as.factor(songs$track_explicit)
+table(songs$track_explicit)
+
+songs %>%
+  group_by(key)%>%
+  summarize(n = n())%>%
+  ungroup()%>%
+  mutate(percent = 100*n/sum(n))
+
+songs$key = as.factor(songs$key)
+table(songs$key)
+
+songs$mode = as.factor(songs$mode)
+table(songs$mode)
+
+
+#track_duration+danceability+energy+loudness+speechiness+acousticness+instrumentalness+liveness+valence+tempo
+#tidy numeric                    
+newsongs %>%
+  select(track_duration, danceability,energy,loudness,speechiness,acousticness,instrumentalness,liveness,valence,tempo)%>%
+  pivot_longer(1:10, names_to = 'var',values_to = 'values')%>%
+  ggplot(aes(x=values))+
+  geom_histogram()+
+  facet_wrap(~var, scales = 'free')
+#tidy numeric
+proc = preProcess(songs[,c('track_duration','danceability','energy','loudness','speechiness','acousticness','instrumentalness'
+                     ,'liveness','valence','tempo','rating')],method = 'BoxCox')
+songs_proc <- predict(proc, newdata = newsongs)%>%
+  select(track_duration, danceability,energy,loudness,speechiness,acousticness,instrumentalness,liveness,valence,tempo,rating)
+songs_proc 
+newsongs <- newsongs%>%
+  mutate(track_duration=songs_proc$track_duration,
+           danceability=songs_proc$danceability,
+           energy=songs_proc$energy,
+           loudness=songs_proc$loudness,
+           speechiness=songs_proc$speechiness,
+           acousticness=songs_proc$acousticness,
+           instrumentalness=songs_proc$instrumentalness,
+           liveness=songs_proc$liveness,
+           valence=songs_proc$valence,
+           tempo=songs_proc$tempo,
+           rating=songs_proc$rating)
+
+
+nearZeroVar(songs[,c('track_duration','danceability','energy','loudness','speechiness','acousticness','instrumentalness'
+                     ,'liveness','valence','tempo')],saveMetrics = T)
+```
+
+### Create dummies by hand, and extracting information by looking genre types.
+
+```{r}
+#create dummy
+newsongs <- songs %>%
+  mutate(pop_dummy = as.integer(str_detect(genre, "pop")))%>%
+  mutate(rock_dummy = as.integer(str_detect(genre, "rock")))%>%
+  mutate(country_dummy = as.integer(str_detect(genre, "country")))%>%
+  mutate(rb_dummy = as.integer(str_detect(genre, "r&b")))%>%
+  mutate(disco_dummy = as.integer(str_detect(genre, "disco")))%>%
+  mutate(blues_dummy = as.integer(str_detect(genre, "blues")))%>%
+  mutate(hiphop_dummy = as.integer(str_detect(genre, "hip hop")))%>%
+  mutate(jazz_dummy = as.integer(str_detect(genre, "jazz")))%>%
+  mutate(classic_dummy = as.integer(str_detect(genre, "classic"))) %>%
+  mutate(folk_dummy = as.integer(str_detect(genre, "folk"))) %>%
+  mutate(rap_dummy = as.integer(str_detect(genre, "rap"))) %>%
+  mutate(dance_dummy = as.integer(str_detect(genre, "dance"))) %>%
+  mutate(funk_dummy = as.integer(str_detect(genre, "funk"))) %>%
+  mutate(modern_dummy = as.integer(str_detect(genre, "modern"))) %>%
+  mutate(soul_dummy = as.integer(str_detect(genre, "soul"))) %>%
+  mutate(adult_dummy = as.integer(str_detect(genre, "adult"))) %>%
+  mutate(metal_dummy = as.integer(str_detect(genre, "metal"))) %>%
+  mutate(edm_dummy = as.integer(str_detect(genre, "edm"))) %>%
+  mutate(latin_dummy = as.integer(str_detect(genre, "latin"))) %>%
+  mutate(quiet_dummy = as.integer(str_detect(genre, "quiet"))) %>%
+  mutate(elect_dummy = as.integer(str_detect(genre, "elect"))) %>%
+  mutate(hollywood_dummy = as.integer(str_detect(genre, "hollywood"))) %>%
+  mutate(freestyle_dummy = as.integer(str_detect(genre, "freestyle"))) %>%
+  mutate(piano_dummy = as.integer(str_detect(genre, "piano"))) %>%
+  mutate(romantic_dummy = as.integer(str_detect(genre, "romantic"))) %>%
+  mutate(album_dummy = as.integer(str_detect(genre, "album"))) %>%
+  mutate(instrumental_dummy = as.integer(str_detect(genre, "instrumental"))) %>%
+  mutate(swing_dummy = as.integer(str_detect(genre, "swing"))) %>%
+  mutate(urban_dummy = as.integer(str_detect(genre, "urban"))) %>%
+  mutate(cosmic_dummy = as.integer(str_detect(genre, "cosmic"))) %>%
+  mutate(storm_dummy = as.integer(str_detect(genre, "storm"))) %>%
+  mutate(samba_dummy = as.integer(str_detect(genre, "samba"))) %>%
+  mutate(band_dummy = as.integer(str_detect(genre, "band"))) %>%
+  mutate(house_dummy = as.integer(str_detect(genre, "house"))) %>%
+  mutate(club_dummy = as.integer(str_detect(genre, "club"))) %>%
+  mutate(drill_dummy = as.integer(str_detect(genre, "drill"))) %>%
+  mutate(idol_dummy = as.integer(str_detect(genre, "idol"))) %>%
+  mutate(mellow_dummy = as.integer(str_detect(genre, "mellow"))) %>%
+  mutate(novelty_dummy = as.integer(str_detect(genre, "novelty"))) %>%
+  mutate(lilith_dummy = as.integer(str_detect(genre, "lilith"))) %>%
+  mutate(show_dummy = as.integer(str_detect(genre, "show"))) %>%
+  mutate(wave_dummy = as.integer(str_detect(genre, "wave"))) %>%
+  mutate(emo_dummy = as.integer(str_detect(genre, "emo"))) %>%
+  mutate(motown_dummy = as.integer(str_detect(genre, "motown"))) %>%
+  mutate(punk_dummy = as.integer(str_detect(genre, "punk"))) %>%
+  mutate(contemporary_dummy = as.integer(str_detect(genre, "contemporary"))) %>%
+  mutate(alternative_dummy = as.integer(str_detect(genre, "alternative"))) %>%
+  mutate(comic_dummy = as.integer(str_detect(genre, "comic"))) %>%
+  mutate(beat_dummy = as.integer(str_detect(genre, "beat"))) %>%
+  mutate(broadway_dummy = as.integer(str_detect(genre, "broadway"))) %>%
+  mutate(neo_dummy = as.integer(str_detect(genre, "neo"))) %>%
+  mutate(sound_dummy = as.integer(str_detect(genre, "sound"))) %>%
+  mutate(room_dummy = as.integer(str_detect(genre, "room"))) %>%
+  mutate(uk_dummy = as.integer(str_detect(genre, "uk"))) %>%
+  mutate(canad_dummy = as.integer(str_detect(genre, "canad"))) %>%
+  mutate(euro_dummy = as.integer(str_detect(genre, "euro"))) %>%
+  mutate(indie_dummy = as.integer(str_detect(genre, "indie"))) %>%
+  mutate(austra_dummy = as.integer(str_detect(genre, "austra"))) %>%
+  mutate(gospel_dummy = as.integer(str_detect(genre, "gospel"))) %>%
+  mutate(easy_dummy = as.integer(str_detect(genre, "easy"))) %>%
+  mutate(doo_dummy = as.integer(str_detect(genre, "doo"))) %>%
+  mutate(bubblegum_dummy = as.integer(str_detect(genre, "bubblegum"))) %>%
+  mutate(rhythm_dummy = as.integer(str_detect(genre, "rhythm"))) %>%
+  mutate(chicago_dummy = as.integer(str_detect(genre, "chicago"))) %>%
+  mutate(fusion_dummy = as.integer(str_detect(genre, "fusion"))) %>%
+  mutate(ameri_dummy = as.integer(str_detect(genre, "ameri"))) %>%
+  mutate(atl_dummy = as.integer(str_detect(genre, "atl"))) %>%
+  mutate(philly_dummy = as.integer(str_detect(genre, "philly"))) %>%
+  mutate(british_dummy = as.integer(str_detect(genre, "british"))) %>%
+  mutate(glam_dummy = as.integer(str_detect(genre, "glam"))) %>%
+  mutate(traditional_dummy = as.integer(str_detect(genre, "traditional"))) %>%
+  mutate(soft_dummy = as.integer(str_detect(genre, "soft"))) %>%
+  mutate(melodic_dummy = as.integer(str_detect(genre, "melodic"))) %>%
+  mutate(progressive_dummy = as.integer(str_detect(genre, "progressive"))) %>%
+  mutate(south_dummy = as.integer(str_detect(genre, "south"))) %>%
+  mutate(permanent_dummy = as.integer(str_detect(genre, "permanent"))) %>%
+  mutate(brill_dummy = as.integer(str_detect(genre, "brill"))) %>%
+  mutate(lounge_dummy = as.integer(str_detect(genre, "lounge"))) %>%
+  mutate(symphonic_dummy = as.integer(str_detect(genre, "symphonic"))) %>%
+  mutate(memphis_dummy = as.integer(str_detect(genre, "memphis"))) %>%
+  mutate(new_dummy = as.integer(str_detect(genre, "new"))) %>%
+  mutate(bronx_dummy = as.integer(str_detect(genre, "bronx"))) %>%
+  mutate(hard_dummy = as.integer(str_detect(genre, "hard"))) %>%
+  mutate(arkansas_dummy = as.integer(str_detect(genre, "arkansas"))) %>%
+  mutate(techno_dummy = as.integer(str_detect(genre, "techno"))) %>%
+  mutate(ohio_dummy = as.integer(str_detect(genre, "ohio"))) %>%
+  mutate(teen_dummy = as.integer(str_detect(genre, "teen"))) %>%
+  mutate(orchestral_dummy = as.integer(str_detect(genre, "orchestral"))) %>%
+  mutate(oklahoma_dummy = as.integer(str_detect(genre, "oklahoma"))) %>%
+  mutate(songwriter_dummy = as.integer(str_detect(genre, "songwriter"))) %>%
+  mutate(texas_dummy = as.integer(str_detect(genre, "texas"))) %>%
+  mutate(psychedelic_dummy = as.integer(str_detect(genre, "psychedelic"))) %>%
+  mutate(nu_dummy = as.integer(str_detect(genre, "nu"))) %>%
+  mutate(yacht_dummy = as.integer(str_detect(genre, "yacht"))) %>%
+  mutate(synth_dummy = as.integer(str_detect(genre, "synth"))) %>%
+  mutate(na_dummy = as.integer(is.na(genre))) %>%
+  replace(is.na(.), 0)
+```
+
+```{r}
+### gam model
+model1 = gam(rating ~ s(track_duration)+track_explicit+s(danceability)+s(energy)+s(loudness)+s(speechiness)
+                     +s(acousticness)+s(instrumentalness)+s(liveness)+s(valence)+s(tempo)+time_signature+pop_dummy +rock_dummy +country_dummy +rb_dummy +disco_dummy +blues_dummy +hiphop_dummy +jazz_dummy +classic_dummy + na_dummy+folk_dummy+rap_dummy+dance_dummy+funk_dummy+modern_dummy+soul_dummy+  adult_dummy+metal_dummy+edm_dummy+latin_dummy+quiet_dummy+elect_dummy+hollywood_dummy+freestyle_dummy+piano_dummy+romantic_dummy+album_dummy+instrumental_dummy+swing_dummy+urban_dummy+cosmic_dummy+storm_dummy+samba_dummy+band_dummy+house_dummy+club_dummy+drill_dummy+idol_dummy+mellow_dummy+novelty_dummy+lilith_dummy+show_dummy+wave_dummy+emo_dummy++motown_dummy+punk_dummy+contemporary_dummy+alternative_dummy+comic_dummy+beat_dummy+broadway_dummy+neo_dummy+sound_dummy+level1+level2,data = train, method = "REML")
+summary(model1)
+pred_model1 = predict(model1, newdata = test)
+rmse_model1 = sqrt(mean((pred_model1 - test$rating)^2))
+rmse_model1
+
+#Hybrid Stepwise method
+start_model = lm(rating~1,train)
+empty_model = lm(rating~1,train)
+full_model = lm(rating~track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature+pop_dummy +rock_dummy +country_dummy +rb_dummy +disco_dummy +blues_dummy +hiphop_dummy +jazz_dummy +classic_dummy + na_dummy+folk_dummy+rap_dummy+dance_dummy+funk_dummy+modern_dummy+soul_dummy+  adult_dummy+metal_dummy+edm_dummy+latin_dummy+quiet_dummy+electro_dummy+hollywood_dummy+freestyle_dummy+piano_dummy+romantic_dummy,train)
+hybrid = step(start_model, scope = list(upper = full_model, lower = empty_model),direction = 'both')
+summary(hybrid)
+pred_model3 = predict(hybrid, newdata = test)
+rmse_model3 = sqrt(mean((pred_model3 - test$rating)^2))
+rmse_model3
+
+###decision tree
+tree1 = rpart(rating ~ track_duration+track_explicit+danceability+energy+key+loudness+mode+speechiness
+                     +acousticness+instrumentalness+liveness+valence+tempo+time_signature+pop_dummy +rock_dummy +country_dummy +rb_dummy +disco_dummy +blues_dummy +hiphop_dummy +jazz_dummy +classic_dummy + na_dummy+folk_dummy+rap_dummy+dance_dummy+funk_dummy+modern_dummy+soul_dummy, train)
+
+pred1 = predict(tree1, type = 'vector')
+rmse1 = sqrt(mean((pred1 - test$rating)^2));rmse1
+
+## RF
+Boruta = Boruta(rating ~ track_duration + track_explicit + danceability + energy + 
+    loudness + mode + speechiness + acousticness + instrumentalness + 
+    liveness + valence + tempo + time_signature + pop_dummy + 
+    rock_dummy + country_dummy + rb_dummy + disco_dummy + blues_dummy + 
+    hiphop_dummy + jazz_dummy + classic_dummy + na_dummy + folk_dummy + 
+    rap_dummy + dance_dummy + funk_dummy + modern_dummy + soul_dummy + 
+    adult_dummy + metal_dummy + latin_dummy + quiet_dummy + elect_dummy + 
+    hollywood_dummy + piano_dummy + romantic_dummy + album_dummy + 
+    swing_dummy + urban_dummy + storm_dummy + club_dummy + mellow_dummy + 
+    show_dummy + wave_dummy + emo_dummy + motown_dummy + punk_dummy + 
+    contemporary_dummy + alternative_dummy + beat_dummy + neo_dummy + 
+    room_dummy+uk_dummy+canad_dummy+euro_dummy+indie_dummy+austra_dummy+gospel_dummy+easy_dummy+doo_dummy+na_dummy, data = newsongs, doTrace = 2, maxRuns = 500)
+plot(Boruta, las = 2, cex.axis = 0.7)
+
+set.seed(222)
+ind <- sample(2, nrow(newsongs), replace = T, prob = c(0.6, 0.4))
+train <- newsongs[ind==1,]
+test <- newsongs[ind==2,]
+
+getConfirmedFormula(Boruta)
+
+rf =randomForest(formula = rating ~ track_duration + track_explicit + danceability + energy + 
+    loudness + mode + speechiness + acousticness + instrumentalness + 
+    liveness + valence + tempo + time_signature + pop_dummy + 
+    rock_dummy + country_dummy + rb_dummy + disco_dummy + blues_dummy + 
+    hiphop_dummy + jazz_dummy + classic_dummy + na_dummy + folk_dummy + 
+    rap_dummy + dance_dummy + funk_dummy + modern_dummy + soul_dummy + 
+    adult_dummy + metal_dummy + latin_dummy + quiet_dummy + elect_dummy + 
+    hollywood_dummy + piano_dummy + romantic_dummy + album_dummy + 
+    swing_dummy + urban_dummy + storm_dummy + club_dummy + mellow_dummy + 
+    show_dummy + wave_dummy + emo_dummy + motown_dummy + punk_dummy + 
+    contemporary_dummy + alternative_dummy + beat_dummy + neo_dummy + 
+    room_dummy+uk_dummy+canad_dummy+euro_dummy+indie_dummy+austra_dummy+gospel_dummy+easy_dummy+doo_dummy+na_dummy+bubblegum_dummy+rhythm_dummy+chicago_dummy+fusion_dummy+ameri_dummy+atl_dummy+philly_dummy+british_dummy+glam_dummy+traditional_dummy+soft_dummy+melodic_dummy+progressive_dummy+south_dummy+permanent_dummy+brill_dummy+lounge_dummy+symphonic_dummy+memphis_dummy+new_dummy+bronx_dummy+hard_dummy+arkansas_dummy+techno_dummy+ohio_dummy+teen_dummy+orchestral_dummy+oklahoma_dummy+songwriter_dummy+texas_dummy+psychedelic_dummy+nu_dummy+yacht_dummy+synth_dummy,ntree = 5000,data = train)
+rf
+pred2 = predict(rf, test)
+rmse2 = sqrt(mean((pred2 - test$rating)^2));rmse2
+```
+
+```{r}
+# ensure analysisData.csv and scoringData.csv are in your working directory
+setwd('/Users/jimac/Desktop/Columbia/5200 Frameworok and methods I/PAC')
+# following code will read data and construct a simple model
+songs = read.csv('analysisData.csv')
+# read in scoring data and apply model to generate predictions
+scoringData = read.csv('scoringData.csv')
+```
+
+```{r}
+proc_s = preProcess(scoringData[,c('track_duration','danceability','energy','loudness','speechiness','acousticness','instrumentalness'
+                     ,'liveness','valence','tempo')],method = 'BoxCox')
+songs_proc_s <- predict(proc_s, newdata = scoringData)
+
+scoringData <- scoringData %>%
+  mutate(pop_dummy = as.integer(str_detect(genre, "pop")))%>%
+  mutate(rock_dummy = as.integer(str_detect(genre, "rock")))%>%
+  mutate(country_dummy = as.integer(str_detect(genre, "country")))%>%
+  mutate(rb_dummy = as.integer(str_detect(genre, "r&b")))%>%
+  mutate(disco_dummy = as.integer(str_detect(genre, "disco")))%>%
+  mutate(blues_dummy = as.integer(str_detect(genre, "blues")))%>%
+  mutate(hiphop_dummy = as.integer(str_detect(genre, "hip hop")))%>%
+  mutate(jazz_dummy = as.integer(str_detect(genre, "jazz")))%>%
+  mutate(classic_dummy = as.integer(str_detect(genre, "classic"))) %>%
+  mutate(folk_dummy = as.integer(str_detect(genre, "folk"))) %>%
+  mutate(rap_dummy = as.integer(str_detect(genre, "rap"))) %>%
+  mutate(dance_dummy = as.integer(str_detect(genre, "dance"))) %>%
+  mutate(funk_dummy = as.integer(str_detect(genre, "funk"))) %>%
+  mutate(modern_dummy = as.integer(str_detect(genre, "modern"))) %>%
+  mutate(soul_dummy = as.integer(str_detect(genre, "soul"))) %>%
+  mutate(adult_dummy = as.integer(str_detect(genre, "adult"))) %>%
+  mutate(metal_dummy = as.integer(str_detect(genre, "metal"))) %>%
+  mutate(edm_dummy = as.integer(str_detect(genre, "edm"))) %>%
+  mutate(latin_dummy = as.integer(str_detect(genre, "latin"))) %>%
+  mutate(quiet_dummy = as.integer(str_detect(genre, "quiet"))) %>%
+  mutate(elect_dummy = as.integer(str_detect(genre, "elect"))) %>%
+  mutate(hollywood_dummy = as.integer(str_detect(genre, "hollywood"))) %>%
+  mutate(freestyle_dummy = as.integer(str_detect(genre, "freestyle"))) %>%
+  mutate(piano_dummy = as.integer(str_detect(genre, "piano"))) %>%
+  mutate(romantic_dummy = as.integer(str_detect(genre, "romantic"))) %>%
+  mutate(album_dummy = as.integer(str_detect(genre, "album"))) %>%
+  mutate(instrumental_dummy = as.integer(str_detect(genre, "instrumental"))) %>%
+  mutate(swing_dummy = as.integer(str_detect(genre, "swing"))) %>%
+  mutate(urban_dummy = as.integer(str_detect(genre, "urban"))) %>%
+  mutate(cosmic_dummy = as.integer(str_detect(genre, "cosmic"))) %>%
+  mutate(storm_dummy = as.integer(str_detect(genre, "storm"))) %>%
+  mutate(samba_dummy = as.integer(str_detect(genre, "samba"))) %>%
+  mutate(band_dummy = as.integer(str_detect(genre, "band"))) %>%
+  mutate(house_dummy = as.integer(str_detect(genre, "house"))) %>%
+  mutate(club_dummy = as.integer(str_detect(genre, "club"))) %>%
+  mutate(drill_dummy = as.integer(str_detect(genre, "drill"))) %>%
+  mutate(idol_dummy = as.integer(str_detect(genre, "idol"))) %>%
+  mutate(mellow_dummy = as.integer(str_detect(genre, "mellow"))) %>%
+  mutate(novelty_dummy = as.integer(str_detect(genre, "novelty"))) %>%
+  mutate(lilith_dummy = as.integer(str_detect(genre, "lilith"))) %>%
+  mutate(show_dummy = as.integer(str_detect(genre, "show"))) %>%
+  mutate(wave_dummy = as.integer(str_detect(genre, "wave"))) %>%
+  mutate(emo_dummy = as.integer(str_detect(genre, "emo"))) %>%
+  mutate(motown_dummy = as.integer(str_detect(genre, "motown"))) %>%
+  mutate(punk_dummy = as.integer(str_detect(genre, "punk"))) %>%
+  mutate(contemporary_dummy = as.integer(str_detect(genre, "contemporary"))) %>%
+  mutate(alternative_dummy = as.integer(str_detect(genre, "alternative"))) %>%
+  mutate(comic_dummy = as.integer(str_detect(genre, "comic"))) %>%
+  mutate(beat_dummy = as.integer(str_detect(genre, "beat"))) %>%
+  mutate(broadway_dummy = as.integer(str_detect(genre, "broadway"))) %>%
+  mutate(neo_dummy = as.integer(str_detect(genre, "neo"))) %>%
+  mutate(sound_dummy = as.integer(str_detect(genre, "sound"))) %>%
+  mutate(room_dummy = as.integer(str_detect(genre, "room"))) %>%
+  mutate(uk_dummy = as.integer(str_detect(genre, "uk"))) %>%
+  mutate(canad_dummy = as.integer(str_detect(genre, "canad"))) %>%
+  mutate(euro_dummy = as.integer(str_detect(genre, "euro"))) %>%
+  mutate(indie_dummy = as.integer(str_detect(genre, "indie"))) %>%
+  mutate(austra_dummy = as.integer(str_detect(genre, "austra"))) %>%
+  mutate(gospel_dummy = as.integer(str_detect(genre, "gospel"))) %>%
+  mutate(easy_dummy = as.integer(str_detect(genre, "easy"))) %>%
+  mutate(doo_dummy = as.integer(str_detect(genre, "doo"))) %>%
+  mutate(bubblegum_dummy = as.integer(str_detect(genre, "bubblegum"))) %>%
+  mutate(rhythm_dummy = as.integer(str_detect(genre, "rhythm"))) %>%
+  mutate(chicago_dummy = as.integer(str_detect(genre, "chicago"))) %>%
+  mutate(fusion_dummy = as.integer(str_detect(genre, "fusion"))) %>%
+  mutate(ameri_dummy = as.integer(str_detect(genre, "ameri"))) %>%
+  mutate(atl_dummy = as.integer(str_detect(genre, "atl"))) %>%
+  mutate(philly_dummy = as.integer(str_detect(genre, "philly"))) %>%
+  mutate(british_dummy = as.integer(str_detect(genre, "british"))) %>%
+  mutate(glam_dummy = as.integer(str_detect(genre, "glam"))) %>%
+  mutate(traditional_dummy = as.integer(str_detect(genre, "traditional"))) %>%
+  mutate(soft_dummy = as.integer(str_detect(genre, "soft"))) %>%
+  mutate(melodic_dummy = as.integer(str_detect(genre, "melodic"))) %>%
+  mutate(progressive_dummy = as.integer(str_detect(genre, "progressive"))) %>%
+  mutate(south_dummy = as.integer(str_detect(genre, "south"))) %>%
+  mutate(permanent_dummy = as.integer(str_detect(genre, "permanent"))) %>%
+  mutate(brill_dummy = as.integer(str_detect(genre, "brill"))) %>%
+  mutate(lounge_dummy = as.integer(str_detect(genre, "lounge"))) %>%
+  mutate(symphonic_dummy = as.integer(str_detect(genre, "symphonic"))) %>%
+  mutate(memphis_dummy = as.integer(str_detect(genre, "memphis"))) %>%
+  mutate(new_dummy = as.integer(str_detect(genre, "new"))) %>%
+  mutate(bronx_dummy = as.integer(str_detect(genre, "bronx"))) %>%
+  mutate(hard_dummy = as.integer(str_detect(genre, "hard"))) %>%
+  mutate(arkansas_dummy = as.integer(str_detect(genre, "arkansas"))) %>%
+  mutate(techno_dummy = as.integer(str_detect(genre, "techno"))) %>%
+  mutate(ohio_dummy = as.integer(str_detect(genre, "ohio"))) %>%
+  mutate(teen_dummy = as.integer(str_detect(genre, "teen"))) %>%
+  mutate(orchestral_dummy = as.integer(str_detect(genre, "orchestral"))) %>%
+  mutate(oklahoma_dummy = as.integer(str_detect(genre, "oklahoma"))) %>%
+  mutate(songwriter_dummy = as.integer(str_detect(genre, "songwriter"))) %>%
+  mutate(texas_dummy = as.integer(str_detect(genre, "texas"))) %>%
+  mutate(psychedelic_dummy = as.integer(str_detect(genre, "psychedelic"))) %>%
+  mutate(nu_dummy = as.integer(str_detect(genre, "nu"))) %>%
+  mutate(yacht_dummy = as.integer(str_detect(genre, "yacht"))) %>%
+  mutate(synth_dummy = as.integer(str_detect(genre, "synth"))) %>%
+  mutate(track_duration = songs_proc_s$track_duration,
+         danceability = songs_proc_s$danceability,
+         energy = songs_proc_s$energy,
+         loudness = songs_proc_s$loudness,
+         speechiness = songs_proc_s$speechiness,
+         acousticness = songs_proc_s$acousticness,
+         instrumentalness = songs_proc_s$instrumentalness,
+         liveness = songs_proc_s$liveness,
+         valence = songs_proc_s$valence,
+         tempo = songs_proc_s$tempo) %>%
+  mutate(na_dummy = as.integer(is.na(genre))) %>%
+  replace(is.na(.), 0)
+# construct submission from predictions
+pred = predict(rf,newdata=scoringData)
+submissionFile = data.frame(id = scoringData$id, rating = pred)
+write.csv(submissionFile, 'sample_submission.csv',row.names = F)
+```
+
+```{r}
+library(mice)
+library(Metrics)
+library(randomForest)
+library(caret)
+library(ggcorrplot)
+library(car)
+library(leaps)
+library(glmnet)
+library(dplyr);library(stringr);library(readr);library(tidyr)
+library(mgcv)
+library(broom)
+library(forcats)
+library(e1071)
+library(ISLR2)
+library(rpart)
+library(rpart.plot)
+library(Boruta)
+library(Rborist)
+library(ranger)
+library(gbm)
+```
+
+```{r}
+proc = preProcess(songs[,c('track_duration','danceability','energy','loudness','speechiness','acousticness','instrumentalness'
+                     ,'liveness','valence','tempo')],method = 'BoxCox')
+songs_proc <- predict(proc, newdata = songs)
+
+newsongs <- songs %>%
+  mutate(pop_dummy = as.integer(str_detect(genre, "pop")))%>%
+  mutate(rock_dummy = as.integer(str_detect(genre, "rock")))%>%
+  mutate(country_dummy = as.integer(str_detect(genre, "country")))%>%
+  mutate(rb_dummy = as.integer(str_detect(genre, "r&b")))%>%
+  mutate(disco_dummy = as.integer(str_detect(genre, "disco")))%>%
+  mutate(blues_dummy = as.integer(str_detect(genre, "blues")))%>%
+  mutate(hiphop_dummy = as.integer(str_detect(genre, "hip hop")))%>%
+  mutate(jazz_dummy = as.integer(str_detect(genre, "jazz")))%>%
+  mutate(classic_dummy = as.integer(str_detect(genre, "classic"))) %>%
+  mutate(folk_dummy = as.integer(str_detect(genre, "folk"))) %>%
+  mutate(rap_dummy = as.integer(str_detect(genre, "rap"))) %>%
+  mutate(dance_dummy = as.integer(str_detect(genre, "dance"))) %>%
+  mutate(funk_dummy = as.integer(str_detect(genre, "funk"))) %>%
+  mutate(modern_dummy = as.integer(str_detect(genre, "modern"))) %>%
+  mutate(soul_dummy = as.integer(str_detect(genre, "soul"))) %>%
+  mutate(adult_dummy = as.integer(str_detect(genre, "adult"))) %>%
+  mutate(metal_dummy = as.integer(str_detect(genre, "metal"))) %>%
+  mutate(edm_dummy = as.integer(str_detect(genre, "edm"))) %>%
+  mutate(latin_dummy = as.integer(str_detect(genre, "latin"))) %>%
+  mutate(quiet_dummy = as.integer(str_detect(genre, "quiet"))) %>%
+  mutate(elect_dummy = as.integer(str_detect(genre, "elect"))) %>%
+  mutate(hollywood_dummy = as.integer(str_detect(genre, "hollywood"))) %>%
+  mutate(freestyle_dummy = as.integer(str_detect(genre, "freestyle"))) %>%
+  mutate(piano_dummy = as.integer(str_detect(genre, "piano"))) %>%
+  mutate(romantic_dummy = as.integer(str_detect(genre, "romantic"))) %>%
+  mutate(album_dummy = as.integer(str_detect(genre, "album"))) %>%
+  mutate(instrumental_dummy = as.integer(str_detect(genre, "instrumental"))) %>%
+  mutate(swing_dummy = as.integer(str_detect(genre, "swing"))) %>%
+  mutate(urban_dummy = as.integer(str_detect(genre, "urban"))) %>%
+  mutate(cosmic_dummy = as.integer(str_detect(genre, "cosmic"))) %>%
+  mutate(storm_dummy = as.integer(str_detect(genre, "storm"))) %>%
+  mutate(samba_dummy = as.integer(str_detect(genre, "samba"))) %>%
+  mutate(band_dummy = as.integer(str_detect(genre, "band"))) %>%
+  mutate(house_dummy = as.integer(str_detect(genre, "house"))) %>%
+  mutate(club_dummy = as.integer(str_detect(genre, "club"))) %>%
+  mutate(drill_dummy = as.integer(str_detect(genre, "drill"))) %>%
+  mutate(idol_dummy = as.integer(str_detect(genre, "idol"))) %>%
+  mutate(mellow_dummy = as.integer(str_detect(genre, "mellow"))) %>%
+  mutate(novelty_dummy = as.integer(str_detect(genre, "novelty"))) %>%
+  mutate(lilith_dummy = as.integer(str_detect(genre, "lilith"))) %>%
+  mutate(show_dummy = as.integer(str_detect(genre, "show"))) %>%
+  mutate(wave_dummy = as.integer(str_detect(genre, "wave"))) %>%
+  mutate(emo_dummy = as.integer(str_detect(genre, "emo"))) %>%
+  mutate(motown_dummy = as.integer(str_detect(genre, "motown"))) %>%
+  mutate(punk_dummy = as.integer(str_detect(genre, "punk"))) %>%
+  mutate(contemporary_dummy = as.integer(str_detect(genre, "contemporary"))) %>%
+  mutate(alternative_dummy = as.integer(str_detect(genre, "alternative"))) %>%
+  mutate(comic_dummy = as.integer(str_detect(genre, "comic"))) %>%
+  mutate(beat_dummy = as.integer(str_detect(genre, "beat"))) %>%
+  mutate(broadway_dummy = as.integer(str_detect(genre, "broadway"))) %>%
+  mutate(neo_dummy = as.integer(str_detect(genre, "neo"))) %>%
+  mutate(sound_dummy = as.integer(str_detect(genre, "sound"))) %>%
+  mutate(room_dummy = as.integer(str_detect(genre, "room"))) %>%
+  mutate(uk_dummy = as.integer(str_detect(genre, "uk"))) %>%
+  mutate(canad_dummy = as.integer(str_detect(genre, "canad"))) %>%
+  mutate(euro_dummy = as.integer(str_detect(genre, "euro"))) %>%
+  mutate(indie_dummy = as.integer(str_detect(genre, "indie"))) %>%
+  mutate(austra_dummy = as.integer(str_detect(genre, "austra"))) %>%
+  mutate(gospel_dummy = as.integer(str_detect(genre, "gospel"))) %>%
+  mutate(easy_dummy = as.integer(str_detect(genre, "easy"))) %>%
+  mutate(doo_dummy = as.integer(str_detect(genre, "doo"))) %>%
+  mutate(bubblegum_dummy = as.integer(str_detect(genre, "bubblegum"))) %>%
+  mutate(rhythm_dummy = as.integer(str_detect(genre, "rhythm"))) %>%
+  mutate(chicago_dummy = as.integer(str_detect(genre, "chicago"))) %>%
+  mutate(fusion_dummy = as.integer(str_detect(genre, "fusion"))) %>%
+  mutate(ameri_dummy = as.integer(str_detect(genre, "ameri"))) %>%
+  mutate(atl_dummy = as.integer(str_detect(genre, "atl"))) %>%
+  mutate(philly_dummy = as.integer(str_detect(genre, "philly"))) %>%
+  mutate(british_dummy = as.integer(str_detect(genre, "british"))) %>%
+  mutate(glam_dummy = as.integer(str_detect(genre, "glam"))) %>%
+  mutate(traditional_dummy = as.integer(str_detect(genre, "traditional"))) %>%
+  mutate(soft_dummy = as.integer(str_detect(genre, "soft"))) %>%
+  mutate(melodic_dummy = as.integer(str_detect(genre, "melodic"))) %>%
+  mutate(progressive_dummy = as.integer(str_detect(genre, "progressive"))) %>%
+  mutate(south_dummy = as.integer(str_detect(genre, "south"))) %>%
+  mutate(permanent_dummy = as.integer(str_detect(genre, "permanent"))) %>%
+  mutate(brill_dummy = as.integer(str_detect(genre, "brill"))) %>%
+  mutate(lounge_dummy = as.integer(str_detect(genre, "lounge"))) %>%
+  mutate(symphonic_dummy = as.integer(str_detect(genre, "symphonic"))) %>%
+  mutate(memphis_dummy = as.integer(str_detect(genre, "memphis"))) %>%
+  mutate(new_dummy = as.integer(str_detect(genre, "new"))) %>%
+  mutate(bronx_dummy = as.integer(str_detect(genre, "bronx"))) %>%
+  mutate(hard_dummy = as.integer(str_detect(genre, "hard"))) %>%
+  mutate(arkansas_dummy = as.integer(str_detect(genre, "arkansas"))) %>%
+  mutate(techno_dummy = as.integer(str_detect(genre, "techno"))) %>%
+  mutate(ohio_dummy = as.integer(str_detect(genre, "ohio"))) %>%
+  mutate(teen_dummy = as.integer(str_detect(genre, "teen"))) %>%
+  mutate(orchestral_dummy = as.integer(str_detect(genre, "orchestral"))) %>%
+  mutate(oklahoma_dummy = as.integer(str_detect(genre, "oklahoma"))) %>%
+  mutate(songwriter_dummy = as.integer(str_detect(genre, "songwriter"))) %>%
+  mutate(texas_dummy = as.integer(str_detect(genre, "texas"))) %>%
+  mutate(psychedelic_dummy = as.integer(str_detect(genre, "psychedelic"))) %>%
+  mutate(nu_dummy = as.integer(str_detect(genre, "nu"))) %>%
+  mutate(yacht_dummy = as.integer(str_detect(genre, "yacht"))) %>%
+  mutate(synth_dummy = as.integer(str_detect(genre, "synth"))) %>%
+  mutate(track_duration = songs_proc$track_duration,
+         danceability = songs_proc$danceability,
+         energy = songs_proc$energy,
+         loudness = songs_proc$loudness,
+         speechiness = songs_proc$speechiness,
+         acousticness = songs_proc$acousticness,
+         instrumentalness = songs_proc$instrumentalness,
+         liveness = songs_proc$liveness,
+         valence = songs_proc$valence,
+         tempo = songs_proc$tempo) %>%
+  mutate(na_dummy = as.integer(is.na(genre))) %>%
+  replace(is.na(.), 0)
+
+set.seed(617)
+ind <- sample(2, nrow(newsongs), replace = T, prob = c(0.6, 0.4))
+train <- newsongs[ind==1,]
+test <- newsongs[ind==2,]
+```
+
+```{r}
+rf =randomForest(formula = rating ~ track_duration + track_explicit + danceability + energy + 
+    loudness + mode + speechiness + acousticness + instrumentalness + 
+    liveness + valence + tempo + time_signature + pop_dummy + 
+    rock_dummy + country_dummy + rb_dummy + disco_dummy + blues_dummy + 
+    hiphop_dummy + jazz_dummy + classic_dummy + na_dummy + folk_dummy + 
+    rap_dummy + dance_dummy + funk_dummy + modern_dummy + soul_dummy + 
+    adult_dummy + metal_dummy + latin_dummy + quiet_dummy + elect_dummy + 
+    hollywood_dummy + piano_dummy + romantic_dummy + album_dummy + 
+    swing_dummy + urban_dummy + storm_dummy + club_dummy + mellow_dummy + 
+    show_dummy + wave_dummy + emo_dummy + motown_dummy + punk_dummy + 
+    contemporary_dummy + alternative_dummy + beat_dummy + neo_dummy + 
+    room_dummy+uk_dummy+canad_dummy+euro_dummy+indie_dummy+austra_dummy+gospel_dummy+easy_dummy+doo_dummy+na_dummy+bubblegum_dummy+rhythm_dummy+chicago_dummy+fusion_dummy+ameri_dummy+atl_dummy+philly_dummy+british_dummy+glam_dummy+traditional_dummy+soft_dummy+melodic_dummy+progressive_dummy+south_dummy+permanent_dummy+brill_dummy+lounge_dummy+symphonic_dummy+memphis_dummy+new_dummy+bronx_dummy+hard_dummy+arkansas_dummy+techno_dummy+ohio_dummy+teen_dummy+orchestral_dummy+oklahoma_dummy+songwriter_dummy+texas_dummy+psychedelic_dummy+nu_dummy+yacht_dummy+synth_dummy,ntree = 5000,data = train)
+rf
+pred2 = predict(rf, test)
+rmse2 = sqrt(mean((pred2 - test$rating)^2));rmse2
+```
+
+### Random Forest with Range
+
+```{r}
+```{r}
+trControl=trainControl(method="cv",number=5)
+tuneGrid = expand.grid(mtry = seq(80,85,1), 
+                       splitrule = c('extratrees'), 
+                       min.node.size = c(5,6,7))
+set.seed(1031)
+ranger_cv = 
+  train(rating ~ .-id-performer-song-genre-X..,
+        data = train,
+        method = 'ranger',
+        num.trees=1000,
+        trControl = trControl,
+        tuneGrid = tuneGrid)
+
+set.seed(1031)
+tuned_forest_ranger = ranger(rating ~ .-id-performer-song-genre-X..,
+data=train,
+num.trees = 1000, 
+mtry=ranger_cv$bestTune$mtry, 
+min.node.size = ranger_cv$bestTune$min.node.size, 
+splitrule = ranger_cv$bestTune$splitrule)
+
+pred_tuned_forest_ranger = predict(tuned_forest_ranger, data = test, num.trees = 1000)
+rmse_tuned_forest_ranger = sqrt(mean((pred_tuned_forest_ranger$predictions - test$rating)^2)); rmse_tuned_forest_ranger
+
+pred = predict(tuned_forest_ranger, data = y, num.trees = 1000)
+submissionFile = data.frame(id = y$id, rating = pred$predictions)
+write.csv(submissionFile, 'sample_submission.csv',row.names = F)
+```

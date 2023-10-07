@@ -1,0 +1,210 @@
+---
+title: "Predictive Analysis Competition Project Report"
+author: "Zhenyu Wang"
+output: html_document
+---
+
+### Report Summary：
+In this predictive analysis competition, songs data has a total of 19 variables which contain ID, and 3 categories of Character which are singer, song names and genre respectively, and the remaining 14 numeric variables are some features of the song, rating is used as the dependent variable. My approach is to start by extracting information from the genre, including data cleaning of the genre categories, splitting, and then binding the wide data frame into a long list, followed by grouping the genre categories of the list, and using the dplyr pipe function to perform a unique genre count the frequency of occurrence. Finally, the genre categories are sorted according to their frequencies, and dummies are created as estimators by filtering out the genre categories with high frequencies.
+
+After filtering out the genre categories that need to be included in the model, then constructing dummies for the genre categories in the genre list paired songs, I used the sapply function and string detect method to create dummy variables, and before detecting I performed a paste0 function on the filtered genre Before detecting, I did a paste0 function on the filtered genre list, adding single quotes before and after the character in the list, so as to make each genre as a whole, which can improve the correct rate of string detect.
+
+After the construction of the genre dummy, the same process is performed on the scoringData at this point, in order to be able to predict the output later without triggering an error. My model contains the first 700 genre dummies with high frequency and the remaining 14 song features numeric variables, for a total of 714 estimators for rating prediction. after splitting data into training and test groups, I first used random forest I used random forest model with mtry equal to 73 and number of trees equal to 1000. The result is %var explained 23.98 and rmse is 14.40.
+
+There were also many failed attempts, from the beginning I added all 14 numerical variables into the model after normalizing them, and by looking at the mean values of the numerical variables, I found that there was mean skewness, and by looking at the correlation of each numerical variable through the correlation graph, I found that there was multicolinearity, but after I dealt with these problems, the rmse of the model was higher. Finally, I tried to focus on the genre, processing and extracting information from the genre, and found that dealing with the genre can improve the model faster, and the parameters of the random forest model are particularly important in figuring out the tune, which can also greatly improve the prediction of the model. In the model selection I tried subset method, Hybrid Stepwise method, Lasso and ridge regression, gam model, decision tree with tuned cp, boruta feature selection for random forest, random forest with ranger.
+
+In this competition, I improved my skills of cleaning data, extracting key information, creating new variables for prediction, and testing and comparing different models to adjust the model parameters.
+
+```{r}
+#Setting up my working dictionary
+setwd('/Users/jimac/Desktop/Columbia/5200 Frameworok and methods I/PAC/report')
+#Reading analysis CSV file as songs
+songs = read.csv('analysisData.csv')
+#Reading scoring CSV file as ScoringData
+scoringData = read.csv('scoringData.csv')
+```
+
+```{r}
+#Loading necessary packages
+library(mice)
+library(Metrics)
+library(randomForest)
+library(caret)
+library(ggcorrplot)
+library(car)
+library(leaps)
+library(glmnet)
+library(dplyr);library(stringr);library(readr);library(tidyr)
+library(mgcv)
+library(broom)
+library(forcats)
+library(e1071)
+library(ISLR2)
+library(rpart)
+library(rpart.plot)
+library(Boruta)
+library(Rborist)
+library(ranger)
+library(gbm)
+```
+
+```{r}
+#In this step, I first created 13 new columns as new containers, with the main purpose of separating and arranging genre in each data into these new columns.
+new_cols_names = c()
+for(i in c(1:13)){
+  new_cols_names = c(new_cols_names,paste0('g',i))
+}
+
+#Turn the songs dataframe into a tibble type, use the pipe function to clean the data, remove the brackets and quotes.
+songs_tbl = as_tibble(songs)
+songs_tbl2 <- songs_tbl %>% mutate(genre=stringr::str_remove_all(genre,"(\\[|\\]|')")) %>% separate(genre, new_cols_names,',')
+
+#Assign the genre and respective scores from columns 1-13 to the newly created columns, while supplementing the missing variables with complete.case funciton.
+m1=data.frame(n=songs_tbl2[,paste0('g',1)],s=songs_tbl2$rating)
+  mn1=m1[complete.cases(m1), ]
+mn1 <- mn1 %>% rename(g = paste0('g',1)) %>%
+  print(mn1)
+
+m2=data.frame(n=songs_tbl2[,paste0('g',2)],s=songs_tbl2$rating)
+  mn2=m2[complete.cases(m2), ]
+mn2 <- mn2 %>% rename(g = paste0('g',2)) %>%
+  print(mn2)
+
+m3=data.frame(n=songs_tbl2[,paste0('g',3)],s=songs_tbl2$rating)
+  mn3=m3[complete.cases(m3), ]
+mn3 <- mn3 %>% rename(g = paste0('g',3)) %>%
+  print(mn3)
+  
+m4=data.frame(n=songs_tbl2[,paste0('g',4)],s=songs_tbl2$rating)
+  mn4=m4[complete.cases(m4), ]
+mn4 <- mn4 %>% rename(g = paste0('g',4)) %>%
+  print(mn4)
+  
+m5=data.frame(n=songs_tbl2[,paste0('g',5)],s=songs_tbl2$rating)
+  mn5=m5[complete.cases(m5), ]
+mn5 <- mn5 %>% rename(g = paste0('g',5)) %>%
+  print(mn5)
+  
+m6=data.frame(n=songs_tbl2[,paste0('g',6)],s=songs_tbl2$rating)
+  mn6=m6[complete.cases(m6), ]
+mn6 <- mn6 %>% rename(g = paste0('g',6)) %>%
+  print(mn6)
+  
+m7=data.frame(n=songs_tbl2[,paste0('g',7)],s=songs_tbl2$rating)
+  mn7=m7[complete.cases(m7), ]
+mn7 <- mn7 %>% rename(g = paste0('g',7)) %>%
+  print(mn7)
+  
+m8=data.frame(n=songs_tbl2[,paste0('g',8)],s=songs_tbl2$rating)
+  mn8=m8[complete.cases(m8), ]
+mn8 <- mn8 %>% rename(g = paste0('g',8)) %>%
+  print(mn8)
+  
+m9=data.frame(n=songs_tbl2[,paste0('g',9)],s=songs_tbl2$rating)
+  mn9=m9[complete.cases(m9), ]
+mn9 <- mn9 %>% rename(g = paste0('g',9)) %>%
+  print(mn9)
+  
+m10=data.frame(n=songs_tbl2[,paste0('g',10)],s=songs_tbl2$rating)
+  mn10=m10[complete.cases(m10), ]
+mn10 <- mn10 %>% rename(g = paste0('g',10)) %>%
+  print(mn10)
+  
+m11=data.frame(n=songs_tbl2[,paste0('g',11)],s=songs_tbl2$rating)
+  mn11=m11[complete.cases(m11), ]
+mn11 <- mn11 %>% rename(g = paste0('g',11)) %>%
+  print(mn11)
+
+m12=data.frame(n=songs_tbl2[,paste0('g',12)],s=songs_tbl2$rating)
+  mn12=m12[complete.cases(m12), ]
+mn12 <- mn12 %>% rename(g = paste0('g',12)) %>%
+  print(mn12)
+  
+m13=data.frame(n=songs_tbl2[,paste0('g',13)],s=songs_tbl2$rating)
+  mn13=m13[complete.cases(m13), ]
+mn13 <- mn13 %>% rename(g = paste0('g',13)) %>%
+  print(mn13)
+
+#Create a new dataframe and use the rbind function to merge the columns created from 1-13.
+genre_df = data.frame(n=c(),s=c())
+genre_df <- rbind(genre_df, mn1)
+genre_df <- rbind(genre_df, mn2)
+genre_df <- rbind(genre_df, mn3)
+genre_df <- rbind(genre_df, mn4)
+genre_df <- rbind(genre_df, mn5)
+genre_df <- rbind(genre_df, mn6)
+genre_df <- rbind(genre_df, mn7)
+genre_df <- rbind(genre_df, mn8)
+genre_df <- rbind(genre_df, mn9)
+genre_df <- rbind(genre_df, mn10)
+genre_df <- rbind(genre_df, mn11)
+genre_df <- rbind(genre_df, mn12)
+genre_df1 <- rbind(genre_df, mn13)
+
+#Since the list of genre obtained at this point includes unwanted spaces, this will affect the subsequent steps of finding unique genre, and the extra spaces should be removed.
+genre_df1$g = str_trim(genre_df1$g,side = "both")
+
+#The genre types are grouped using the dplyr pipe function, then the frequency of occurrence is counted, the descending function is used according to the frequency of occurrence, and the result is finally stored in w.
+w <- genre_df1 %>%
+  group_by(g)%>%  
+  count()%>%
+  arrange(desc(n))%>%
+  ungroup()
+
+#Adding single quote to Genre list in order to keep Genre as a whole.
+w$g <- paste0("'",w$g,"'")
+
+#Top 700 dummies of genre freq. was selected as new genre list.
+w <- w[1:700,]
+
+#Detected songs$genre by genre freq. list and remove NA, rename to make sure follow analysis (Analysis data)
+z <- cbind(songs, sapply(w$g, function(x) as.integer(str_detect(songs$genre, x)))) %>%
+  replace(is.na(.), 0) %>%
+  dplyr::rename_all(funs(make.names(.)))
+
+#SAME to (Scoring data)
+y <- cbind(scoringData, sapply(w$g, function(x) as.integer(str_detect(scoringData$genre, x)))) %>%
+  replace(is.na(.), 0) %>%
+  dplyr::rename_all(funs(make.names(.)))
+```
+
+```{r}
+#Split Data
+set.seed(222)
+ind <- sample(2, nrow(z), replace = T, prob = c(0.7, 0.3))
+train <- z[ind==1,]
+test <- z[ind==2,]
+```
+
+```{r}
+#best tune: mtry = 73, cross validation 5 fold was used to explore the optimal mtry parameters of Random Forest Model, where the variables of tune included 14 numeric variables and 700 genre type dummies. Where X... is the blank data to be removed.
+set.seed(1031)
+trControl = trainControl(method = 'cv',number = 5)
+tuneGrid = expand.grid(mtry = seq(70,75,1))
+rf_cv = 
+  train(rating ~ .-id-performer-song-genre-X..,
+        data = train,
+        method = 'rf',
+        trControl = trControl,
+        tuneGrid = tuneGrid)
+```
+
+```{r}
+#RF with Best Tune***mtry = 73, ntree = 1000
+tuned_rf = randomForest(rating ~ .-id-performer-song-genre-X..,
+data=train, 
+mtry = as.numeric(rf_cv$bestTune),
+ntree = 1000)
+
+#Using test data to cal. RMSE
+pred_tuned_rf = predict(tuned_rf,newdata = test)
+rmse_tuned_rf = sqrt(mean((pred_tuned_rf - test$rating)^2)); rmse_tuned_rf
+```
+
+```{r}
+#Create RF Tune Submit File
+pred = predict(tuned_rf,newdata=y)
+submissionFile = data.frame(id = y$id, rating = pred)
+write.csv(submissionFile, 'sample_submission.csv',row.names = F)
+```
+
